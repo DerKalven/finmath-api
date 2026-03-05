@@ -107,12 +107,23 @@ class AmortRow(BaseModel):
     is_cancelled: bool
 
 class AmortRequest(BaseModel):
-    """Parámetros para generar la tabla de amortización."""
+    """
+    Parámetros para generar la tabla de amortización.
+
+    El usuario ingresa:
+      - i: tasa efectiva ANUAL (decimal), ej: 0.06 para 6% anual
+      - freq: frecuencia de pagos por año (12=mensual, 4=trimestral, etc.)
+      - n: número de períodos EN LA FRECUENCIA ELEGIDA (ej: 24 meses)
+
+    El backend convierte i_anual → i_periodo antes de calcular:
+      i_periodo = (1 + i_anual)^(1/freq) - 1
+    """
     pv: float
-    i: float            # tasa efectiva anual (decimal)
-    n: int
-    scheme: str = "french"   # "french" | "german" | "american"
-    extra_map: dict = {}     # { "3": 500, "7": 1000 } — período: monto
+    i: float            # tasa efectiva ANUAL (decimal)
+    n: int              # número de períodos en la frecuencia elegida
+    freq: int = 12      # pagos por año: 12=mensual, 4=trimestral, 2=semestral, 1=anual
+    scheme: str = "french"
+    extra_map: dict = {}
 
 class AmortResponse(BaseModel):
     rows: list[AmortRow]
@@ -348,9 +359,15 @@ def calculate_annuity(req: AnnuityRequest):
 def calculate_amortization(req: AmortRequest):
     """
     Genera la tabla de amortización completa con abonos extraordinarios.
-    React llama: POST /amortization con { pv, i, n, scheme, extra_map }
+    React llama: POST /amortization con { pv, i, n, freq, scheme, extra_map }
+
+    Conversión de tasa:
+      i_anual  = 6%  →  i_mensual = (1.06)^(1/12) − 1 = 0.4868% por mes
+    Esta conversión es la correcta para tasas efectivas (no nominales).
     """
-    rows_raw = build_amort_schedule(req.pv, req.i, req.n, req.scheme, req.extra_map)
+    # Convertir tasa efectiva anual → tasa efectiva por período
+    i_periodo = (1 + req.i) ** (1 / req.freq) - 1
+    rows_raw = build_amort_schedule(req.pv, i_periodo, req.n, req.scheme, req.extra_map)
 
     rows = [AmortRow(**r) for r in rows_raw]
 
