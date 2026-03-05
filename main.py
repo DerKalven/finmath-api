@@ -214,13 +214,25 @@ def build_amort_schedule(
     rows = []
 
     if scheme == "french":
-        pmt       = (pv * i) / (1 - (1 + i) ** (-n))
-        balance   = pv
-        remaining = n
-        t         = 1
+        # La cuota PMT se calcula UNA SOLA VEZ sobre el préstamo original
+        # y nunca cambia, ni siquiera después de abonos extraordinarios.
+        #
+        # Comportamiento correcto (estándar bancario latinoamericano):
+        #   - Abono extraordinario → reduce el saldo de capital directamente
+        #   - La cuota se mantiene constante
+        #   - El préstamo termina ANTES porque el saldo cae más rápido
+        #   - El ahorro se materializa en períodos cancelados, no en cuota menor
+        #
+        # Esto difiere del comportamiento anterior donde se recalculaba PMT
+        # después de cada abono (que sería reducción de cuota, no de plazo).
+        pmt     = (pv * i) / (1 - (1 + i) ** (-n))   # fija para siempre
+        balance = pv
+        t       = 1
 
-        while balance > 0.005 and t <= n + len(extras) + 1:
+        while balance > 0.005 and t <= n + 1:
             interest  = balance * i
+            # En el último período puede que el saldo sea menor que PMT − interés
+            # (porque el abono redujo el saldo antes de tiempo)
             principal = min(pmt - interest, balance)
             extra     = min(extras.get(t, 0), max(0, balance - principal))
             balance   = max(0, balance - principal - extra)
@@ -232,9 +244,9 @@ def build_amort_schedule(
                 "is_cancelled": balance < 0.005,
             })
 
-            remaining -= 1
-            if extra > 0 and balance > 0.005 and remaining > 0:
-                pmt = (balance * i) / (1 - (1 + i) ** (-remaining))
+            # NO recalculamos pmt — la cuota es siempre la misma.
+            # El loop termina naturalmente cuando balance ≈ 0,
+            # lo que ocurrirá antes del período n si hubo abonos.
             if balance < 0.005:
                 break
             t += 1
