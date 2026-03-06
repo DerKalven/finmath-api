@@ -80,11 +80,25 @@ class TVMResponse(BaseModel):
 
 # ── Anualidades ──
 class AnnuityRequest(BaseModel):
-    """Parámetros para calcular PV de una anualidad."""
+    """
+    Parámetros para calcular PV de una anualidad.
+
+    El usuario ingresa i como tasa efectiva ANUAL y freq como frecuencia
+    de pagos por año. El backend convierte antes de calcular:
+      i_periodo = (1 + i_anual)^(1/freq) − 1
+
+    Ejemplos de freq:
+      12 → mensual     (cada mes)
+       6 → bimestral   (cada 2 meses)
+       4 → trimestral  (cada 3 meses)
+       2 → semestral   (cada 6 meses)
+       1 → anual       (cada año)
+    """
     type: str           # "immediate" | "due" | "deferred"
     pmt: float          # pago periódico
-    i: float            # tasa efectiva anual (decimal)
-    n: float            # número de pagos
+    i: float            # tasa efectiva ANUAL (decimal)
+    n: float            # número de pagos (en la frecuencia elegida)
+    freq: int = 1       # pagos por año (default 1 = anual, comportamiento original)
     d: float = 0        # períodos de diferimiento (solo si type="deferred")
 
 class AnnuityResponse(BaseModel):
@@ -94,6 +108,8 @@ class AnnuityResponse(BaseModel):
     formula: str
     total_pmts: float
     total_interest: float
+    freq_label: str     # descripción de la frecuencia para mostrar en el frontend
+    i_periodo: float    # tasa efectiva por período (para mostrársela al usuario)
 
 # ── Amortización ──
 class AmortRow(BaseModel):
@@ -339,23 +355,44 @@ def calculate_tvm(req: TVMRequest):
 @app.post("/annuity", response_model=AnnuityResponse)
 def calculate_annuity(req: AnnuityRequest):
     """
-    Calcula PV y valor acumulado de una anualidad.
-    React llama: POST /annuity con { type, pmt, i, n, d }
-    """
-    if req.type == "immediate":
-        pv      = annuity_immediate(req.pmt, req.i, req.n)
-        label   = "Anualidad Vencida — a⌐n|i"
-        formula = "PV = PMT · (1 − vⁿ) / i"
-    elif req.type == "due":
-        pv      = annuity_due(req.pmt, req.i, req.n)
-        label   = "Anualidad Anticipada — ä⌐n|i"
-        formula = "PV = PMT · (1+i) · a⌐n|i"
-    else:
-        pv      = annuity_deferred(req.pmt, req.i, req.n, req.d)
-        label   = f"Anualidad Diferida {int(req.d)} períodos"
-        formula = f"PV = v^{int(req.d)} · PMT · a⌐{int(req.n)}|i"
+    Calcula PV y valor acumulado de una anualidad con frecuencia variable.
+    React llama: POST /annuity con { type, pmt, i, n, freq, d }
 
-    fv = calc_fv(pv, req.i, req.n + (req.d if req.type == "deferred" else 0))
+    Conversión de tasa efectiva anual → tasa efectiva por período:
+      i_periodo = (1 + i_anual)^(1/freq) − 1
+
+    Ejemplo: i=6% anual, freq=12 (mensual)
+      i_mensual = (1.06)^(1/12) − 1 = 0.4868% por mes
+    """
+    # Mapa de frecuencia → descripción legible
+    FREQ_LABELS = {
+        12: "mensual",
+        6:  "bimestral (cada 2 meses)",
+        4:  "trimestral (cada 3 meses)",
+        2:  "semestral (cada 6 meses)",
+        1:  "anual",
+    }
+    freq_label = FREQ_LABELS.get(req.freq, f"cada {12//req.freq} meses")
+
+    # Convertir tasa efectiva anual → tasa efectiva por período
+    i_per = (1 + req.i) ** (1 / req.freq) - 1
+
+    if req.type == "immediate":
+        pv      = annuity_immediate(req.pmt, i_per, req.n)
+        label   = f"Anualidad Vencida — pagos {freq_label}"
+        formula = f"PV = PMT · (1 − v^n) / i_per   [i_per = {i_per*100:.4f}%]"
+    elif req.type == "due":
+        pv      = annuity_due(req.pmt, i_per, req.n)
+        label   = f"Anualidad Anticipada — pagos {freq_label}"
+        formula = f"PV = PMT · (1 + i_per) · a⌐n|i   [i_per = {i_per*100:.4f}%]"
+    else:
+        pv      = annuity_deferred(req.pmt, i_per, req.n, req.d)
+        label   = f"Anualidad Diferida {int(req.d)} períodos — pagos {freq_label}"
+        formula = f"PV = v^{int(req.d)} · PMT · a⌐{int(req.n)}|i   [i_per = {i_per*100:.4f}%]"
+
+    # FV calculado sobre el horizonte total en períodos
+    total_periods = req.n + (req.d if req.type == "deferred" else 0)
+    fv = calc_fv(pv, i_per, total_periods)
 
     return AnnuityResponse(
         pv=round(pv, 2),
@@ -364,6 +401,8 @@ def calculate_annuity(req: AnnuityRequest):
         formula=formula,
         total_pmts=round(req.pmt * req.n, 2),
         total_interest=round(fv - req.pmt * req.n, 2),
+        freq_label=freq_label,
+        i_periodo=round(i_per, 8),
     )
 
 
