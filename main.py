@@ -93,17 +93,18 @@ def build_amortization(
     rows = []
 
     if scheme == "french":
-        pmt       = (pv * i) / (1 - (1 + i) ** (-n))
-        balance   = pv
-        remaining = n   # periods still to be paid AFTER the current one
-        t         = 1
+        # PMT is fixed — extra payments reduce the balance directly,
+        # so the loan terminates early (fewer periods), NOT a lower payment.
+        pmt     = (pv * i) / (1 - (1 + i) ** (-n))
+        balance = pv
+        t       = 1
 
         while balance > 0.005 and t <= n + len(extra_map) + 1:
             interest  = balance * i
+            # On the last period, principal is just the remaining balance
             principal = min(pmt - interest, balance)
             extra     = min(extra_map.get(t, 0), max(0, balance - principal))
             balance   = max(0, balance - principal - extra)
-            remaining -= 1  # one period consumed
 
             rows.append({
                 "t":            t,
@@ -117,11 +118,6 @@ def build_amortization(
 
             if balance < 0.005:
                 break
-
-            # After an extra payment, recalculate the payment over the
-            # periods that are truly left. remaining already reflects this.
-            if extra > 0 and remaining > 0:
-                pmt = (balance * i) / (1 - (1 + i) ** (-remaining))
 
             t += 1
 
