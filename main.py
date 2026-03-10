@@ -89,6 +89,8 @@ def build_amortization(
     """
     if extra_map is None:
         extra_map = {}
+    # JSON keys are always strings — convert to int so lookups work
+    extra_map = {int(k): v for k, v in extra_map.items()}
 
     rows = []
 
